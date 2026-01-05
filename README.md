@@ -20,3 +20,8 @@ Start: npm start
   - iPhone: Instellingen → Privacy en beveiliging → Locatievoorzieningen → Safari Websites → Tijdens gebruik (en ‘Precieze locatie’ aan)
   - Android: Chrome → Site-instellingen → Locatie → Toestaan
 - Herlaad daarna de pagina.
+
+
+## GPS springt naar Afrika (0,0) / oceaan?
+Sommige telefoons geven heel even (0,0) terug of een onbruikbare fix.
+De app negeert nu zulke fixes en toont **“Wachten op GPS-fix…”** tot er een goede locatie is.

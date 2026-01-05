@@ -54,7 +54,7 @@ app.get("/api/route", async (req, res) => {
     const url =
       `https://router.project-osrm.org/route/v1/driving/` +
       `${fLon},${fLat};${tLon},${tLat}` +
-      `?overview=full&geometries=geojson&steps=false`;
+      `?overview=full&geometries=geojson&steps=true`;
 
     const r = await fetch(url, { headers: { "User-Agent": "ski-tracker/5.0" } });
     if (!r.ok) return res.status(502).json({ ok: false, error: "OSRM upstream error" });
@@ -63,6 +63,23 @@ app.get("/api/route", async (req, res) => {
     if (!data?.routes?.[0]) return res.status(502).json({ ok: false, error: "No route" });
 
     const route = data.routes[0];
+    // Build lightweight turn-by-turn list (first leg only)
+    const leg = route.legs?.[0];
+    const steps = Array.isArray(leg?.steps) ? leg.steps : [];
+    const maneuvers = steps.slice(0, 12).map((s) => {
+      const m = s.maneuver || {};
+      const name = (s.name || "").trim();
+      const modifier = (m.modifier || "").trim();
+      const type = (m.type || "").trim();
+      return {
+        distance_m: s.distance,
+        duration_s: s.duration,
+        name,
+        modifier,
+        type
+      };
+    });
+
     return res.json({
       ok: true,
       distance_m: route.distance,

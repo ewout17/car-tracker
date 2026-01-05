@@ -205,3 +205,16 @@ input[type="color"]{padding:8px; height:44px}
   box-shadow:0 6px 18px rgba(0,0,0,.35);
   font-size:18px;
 }
+
+.routeCard{
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: var(--radius);
+  border:1px solid rgba(255,255,255,.08);
+  background: rgba(12,15,20,.55);
+}
+.routeHead{font-weight:800; margin-bottom:4px}
+.routeMeta{color:var(--muted); font-size:12px; margin-bottom:8px}
+.routeSteps{margin:0; padding-left:18px; font-size:13px; line-height:1.35}
+.routeSteps li{margin:6px 0}
+.muted{color:var(--muted)}

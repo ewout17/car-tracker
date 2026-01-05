@@ -15,6 +15,9 @@ let routeLineToDestination = null;
 let destination = null;
 let destinationAlerted = false;
 
+let selectedRouteInfo = null;
+let destinationRouteInfo = null;
+
 const routeCache = new Map();
 const ROUTE_CACHE_MS = 15000;
 
@@ -134,6 +137,7 @@ function afterJoin(roomCode){
   $("start").disabled = false;
   $("share").disabled = false;
   $("pauseBtn").disabled = false;
+  $("pauseBtn2") && ($("pauseBtn2").disabled = false);
   $("roomPill").textContent = `Room: ${roomCode}`;
   $("hudStatus").textContent = "Klaar om te starten";
 }
@@ -155,6 +159,8 @@ $("share").addEventListener("click", async () => {
   }
 });
 
+$("pauseBtn2")?.addEventListener("click", () => $("pauseBtn").click());
+
 $("pauseBtn").addEventListener("click", () => {
   const txt = prompt("Pauze melding (optioneel):", "Pauze nemen");
   if (txt === null) return;
@@ -171,6 +177,11 @@ $("start").addEventListener("click", () => {
       const { latitude, longitude, speed, heading, accuracy } = pos.coords;
       const speedKmh = speed == null ? null : speed * 3.6;
 
+      if (isBadFix(latitude, longitude, accuracy)) {
+        $("hudStatus").textContent = "Wachten op GPS-fix…";
+        return;
+      }
+
       socket.emit("pos", {
         lat: latitude,
         lon: longitude,
@@ -182,7 +193,7 @@ $("start").addEventListener("click", () => {
       if ($("followMe").checked) map.panTo([latitude, longitude], { animate:true, duration:0.5 });
 
       $("hudStatus").textContent =
-        `Live · ~${Math.round(accuracy)}m · ${speedKmh == null ? "—" : speedKmh.toFixed(0)+" km/u"}`;
+        `Live · ~${Math.round(accuracy)}m · ${speedKmh == null ? "—" : speedKmh.toFixed(0)+" km/u"} · ${latitude.toFixed(4)},${longitude.toFixed(4)}`;
     },
     (err) => alert("Locatie fout: " + err.message),
     { enableHighAccuracy:true, maximumAge:1000, timeout:8000 }
@@ -237,11 +248,11 @@ socket.on("roomMessage", (msg) => {
   addRoomMessage(msg);
 
   if ($("enableAlerts").checked) {
-    if (msg.type === "pause") notify("⏸ Pauze", `${msg.by}: ${msg.text}`);
+    if (msg.type === "pause") notify("⏸ Pauze", `${msg.by} wil pauze: ${msg.text}`);
     if (msg.type === "destination") { notify("📍 Bestemming", msg.text); destinationAlerted = false; }
   }
 
-  if (msg.type === "pause") showToast(`⏸ ${msg.by}: ${msg.text}`);
+  if (msg.type === "pause") showToast(`⏸ ${msg.by} wil pauze: ${msg.text}`);
   if (msg.type === "destination") showToast(`📍 ${msg.text}`);
 });
 
@@ -359,7 +370,7 @@ function render(state){
   }
 
   if ($("showRoutes").checked && destination) drawRouteToDestination(me);
-  else clearDestinationRoute();
+  else { clearDestinationRoute(); destinationRouteInfo = null; updateRoutePanels(); }
 
   for (const o of others){
     const distKm = haversineKm(me.lat, me.lon, o.lat, o.lon);
@@ -390,11 +401,15 @@ function render(state){
       computeRouteShort(me, o).then((info) => {
         const etaEl = document.getElementById(`eta-${o.id}`);
         if (etaEl) etaEl.textContent = info.etaShort;
+        selectedRouteInfo = info;
+        updateRoutePanels();
         if ($("showRoutes").checked && info.geometry) drawRouteToSelected(info.geometry);
         else clearSelectedRoute();
       }).catch(() => {
         const etaEl = document.getElementById(`eta-${o.id}`);
         if (etaEl) etaEl.textContent = "—";
+        selectedRouteInfo = null;
+        updateRoutePanels();
         clearSelectedRoute();
       });
     }
@@ -460,6 +475,8 @@ async function drawRouteToDestination(me){
 
   clearDestinationRoute();
   routeLineToDestination = L.geoJSON(data.geometry_geojson, { weight:6, opacity:0.45 }).addTo(map);
+  destinationRouteInfo = { etaShort: formatDuration(data.duration_s), distanceText: formatDistance(data.distance_m), maneuvers: Array.isArray(data.maneuvers)?data.maneuvers:[] };
+  updateRoutePanels();
 
   if ($("enableAlerts").checked) checkDestinationAlert(data.distance_m, destination.label);
 }
@@ -483,11 +500,15 @@ async function computeRouteShort(me, other){
 
   let geometry = null;
   let etaShort = "—";
+  let distanceText = "—";
+  let maneuvers = [];
   if (ab?.ok){
     etaShort = formatDuration(ab.duration_s);
+    distanceText = formatDistance(ab.distance_m);
     geometry = ab.geometry_geojson;
+    maneuvers = Array.isArray(ab.maneuvers) ? ab.maneuvers : [];
   }
-  return { etaShort, geometry };
+  return { etaShort, geometry, distanceText, maneuvers };
 }
 
 async function getRouteCached(cacheKey, from, to){
@@ -530,4 +551,70 @@ function escapeHtml(str){
   return String(str).replace(/[&<>"']/g, (c) => ({
     "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
   }[c]));
+}
+
+
+function isBadFix(lat, lon, accuracy){
+  // Some devices briefly return 0,0 or huge accuracy; ignore those.
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return true;
+  if (Math.abs(lat) < 0.001 && Math.abs(lon) < 0.001) return true; // Gulf of Guinea (0,0)
+  if (Number.isFinite(accuracy) && accuracy > 5000) return true; // >5km is likely not usable
+  return false;
+}
+
+function maneuverText(m){
+  const type = (m.type || "").toLowerCase();
+  const mod = (m.modifier || "").toLowerCase();
+  const name = (m.name || "").trim();
+  // Simple NL-ish wording
+  if (type === "depart") return "Vertrek";
+  if (type === "arrive") return "Aankomst";
+  if (type === "roundabout") return "Rotonde";
+  if (type === "merge") return "Invoegen";
+  if (type === "on ramp") return "Oprit";
+  if (type === "off ramp") return "Afrit";
+  if (type === "turn") return `Afslag ${mod || ""}`.trim();
+  if (type === "continue") return "Volg";
+  return (type || "Ga verder");
+}
+
+function formatDistance(meters){
+  if (!Number.isFinite(meters)) return "—";
+  if (meters < 1000) return `${Math.round(meters)} m`;
+  const km = meters/1000;
+  return `${km.toFixed(km < 10 ? 1 : 0)} km`;
+}
+
+
+function updateRoutePanels(){
+  const selBox = document.getElementById("routeSelected");
+  const destBox = document.getElementById("routeDestination");
+  if (selBox){
+    if (selectedRouteInfo){
+      const steps = (selectedRouteInfo.maneuvers || []).slice(0, 4).map((m) => {
+        const txt = maneuverText(m);
+        const road = m.name ? ` · ${escapeHtml(m.name)}` : "";
+        return `<li>${escapeHtml(txt)}${road} <span class="muted">(${formatDistance(m.distance_m)})</span></li>`;
+      }).join("");
+      selBox.innerHTML = `<div class="routeHead">Naar geselecteerde auto</div>
+        <div class="routeMeta">${selectedRouteInfo.distanceText} · ${selectedRouteInfo.etaShort}</div>
+        <ul class="routeSteps">${steps || "<li>Route berekend.</li>"}</ul>`;
+    } else {
+      selBox.innerHTML = `<div class="routeHead">Naar geselecteerde auto</div><div class="routeMeta">Selecteer een auto…</div>`;
+    }
+  }
+  if (destBox){
+    if (destination && destinationRouteInfo){
+      const steps = (destinationRouteInfo.maneuvers || []).slice(0, 4).map((m) => {
+        const txt = maneuverText(m);
+        const road = m.name ? ` · ${escapeHtml(m.name)}` : "";
+        return `<li>${escapeHtml(txt)}${road} <span class="muted">(${formatDistance(m.distance_m)})</span></li>`;
+      }).join("");
+      destBox.innerHTML = `<div class="routeHead">Naar bestemming</div>
+        <div class="routeMeta">${destinationRouteInfo.distanceText} · ${destinationRouteInfo.etaShort}</div>
+        <ul class="routeSteps">${steps || "<li>Route berekend.</li>"}</ul>`;
+    } else {
+      destBox.innerHTML = `<div class="routeHead">Naar bestemming</div><div class="routeMeta">Nog geen bestemming…</div>`;
+    }
+  }
 }
