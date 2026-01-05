@@ -11,6 +11,7 @@
 
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
 
   <link rel="stylesheet" href="style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -24,7 +25,11 @@
         <div class="subtitle" id="roomPill">Niet verbonden</div>
       </div>
     </div>
-    <button class="ghost" id="openPanel" aria-label="Open panel">☰</button>
+
+    <div class="topActions">
+      <button class="ghost" id="installBtn" hidden>⬇︎ Installeren</button>
+      <button class="ghost" id="openPanel" aria-label="Open menu">☰</button>
+    </div>
   </header>
 
   <main class="main">
@@ -32,7 +37,7 @@
       <div id="map"></div>
 
       <div class="hud">
-        <div class="hudCard" id="hudDest">
+        <div class="hudCard">
           <div class="hudTitle">Bestemming</div>
           <div class="hudValue" id="hudDestValue">Nog niet ingesteld</div>
         </div>
@@ -48,6 +53,8 @@
         <button class="fab primary" id="start" disabled>▶ Start</button>
         <button class="fab danger" id="stop" disabled>■ Stop</button>
       </div>
+
+      <button class="miniHandle" id="miniHandle" aria-label="Open menu">▲ Menu</button>
     </section>
 
     <section class="sheet" id="sheet" aria-hidden="true">
@@ -99,7 +106,7 @@
           </div>
 
           <div class="hint">
-            Locatie-permissie wordt gevraagd bij Join. Laat je browser open voor live updates.
+            Locatie-permissie wordt gevraagd bij Join. iPhone: Safari moet open blijven voor live tracking.
           </div>
         </div>
 
@@ -155,6 +162,10 @@
 
           <div class="actions">
             <button class="btn ghost" id="closePanel2">Sluiten</button>
+          </div>
+
+          <div class="hint">
+            Installeren: Android/Chrome toont “Installeren”. iPhone: Deel ▸ “Zet op beginscherm”.
           </div>
         </div>
       </div>

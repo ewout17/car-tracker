@@ -22,6 +22,38 @@ const sheet = $("sheet");
 const toast = $("toast");
 let toastTimer = null;
 
+async function ensureGeoPermission(){
+  // Must be HTTPS for geolocation (Render is HTTPS). If not, explain.
+  if (!window.isSecureContext) {
+    showToast("Locatie werkt alleen via HTTPS.");
+    alert("Locatie werkt alleen via HTTPS. Open de site via https:// (Render link).");
+    return false;
+  }
+
+  // If Permissions API available, give clear guidance when denied
+  try {
+    if (navigator.permissions?.query) {
+      const p = await navigator.permissions.query({ name: "geolocation" });
+      if (p.state === "denied") {
+        showToast("Locatie is geblokkeerd.");
+        alert(
+          "Locatie is geblokkeerd in je browser.\n\n" +
+          "iPhone (Safari): Instellingen > Safari > Locatie (of: Instellingen > Privacy > Locatievoorzieningen) en zet op 'Tijdens gebruik'.\n" +
+          "Android (Chrome): Site-instellingen > Locatie > Toestaan.\n\n" +
+          "Tip: herlaad daarna de pagina."
+        );
+        return false;
+      }
+    }
+  } catch { /* ignore */ }
+
+  return true;
+}
+
+
+// Install prompt (Android/Chrome)
+let deferredInstallPrompt = null;
+
 initPrefill();
 initMap();
 wireSheet();
@@ -29,9 +61,27 @@ wireTabs();
 maybeRegisterSW();
 maybeRequestNotificationPermission();
 
-$("openPanel").addEventListener("click", () => openSheet(true));
-$("closePanel").addEventListener("click", () => openSheet(false));
-$("closePanel2").addEventListener("click", () => openSheet(false));
+// Install prompt hook (Chrome/Android)
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  const btn = $("installBtn");
+  if (btn) btn.hidden = false;
+});
+$("installBtn")?.addEventListener("click", async () => {
+  if (!deferredInstallPrompt) return;
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice.catch(()=>{});
+  deferredInstallPrompt = null;
+  const btn = $("installBtn");
+  if (btn) btn.hidden = true;
+});
+
+// Menu openers
+$("openPanel")?.addEventListener("click", () => openSheet(true));
+$("miniHandle")?.addEventListener("click", () => openSheet(true));
+$("closePanel")?.addEventListener("click", () => openSheet(false));
+$("closePanel2")?.addEventListener("click", () => openSheet(false));
 
 $("join").addEventListener("click", () => {
   const roomCode = $("room").value.trim().toUpperCase();
@@ -46,18 +96,38 @@ $("join").addEventListener("click", () => {
   localStorage.setItem("ski_carType", carType);
   localStorage.setItem("ski_color", color);
 
-  if (!("geolocation" in navigator)) return alert("Geolocation niet beschikbaar.");
+  if (!("geolocation" in navigator)) {
+    alert("Locatie (GPS) is niet beschikbaar op dit toestel/browser.");
+    return;
+  }
 
-  navigator.geolocation.getCurrentPosition(
-    () => {
-      socket.emit("join", { roomCode, name: myName, carType, color });
-      afterJoin(roomCode);
-      openSheet(false);
-      showToast("Verbonden ✅");
-    },
-    () => alert("Locatie is nodig. Sta locatie toe in je browser."),
-    { enableHighAccuracy: true, timeout: 10000 }
-  );
+  // Make sure permission isn't blocked + require secure context
+  ensureGeoPermission().then((ok) => {
+    if (!ok) return;
+
+    navigator.geolocation.getCurrentPosition(
+      () => {
+        socket.emit("join", { roomCode, name: myName, carType, color });
+        afterJoin(roomCode);
+        openSheet(false);
+        showToast("Verbonden ✅ (locatie actief)");
+      },
+      (err) => {
+        const msg = err?.message || "Onbekende fout";
+        showToast("Locatie toestemming nodig");
+        alert(
+          "We kunnen je locatie niet ophalen.\n\n" +
+          "Fout: " + msg + "\n\n" +
+          "Check:\n" +
+          "1) Sta locatie toe (browser prompt)\n" +
+          "2) iPhone: zet 'Precieze locatie' aan\n" +
+          "3) Gebruik Safari/Chrome (geen incognito)\n" +
+          "4) Herlaad de pagina"
+        );
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+    );
+  });
 });
 
 function afterJoin(roomCode){
@@ -93,6 +163,8 @@ $("pauseBtn").addEventListener("click", () => {
 
 $("start").addEventListener("click", () => {
   if (!("geolocation" in navigator)) return alert("Geolocation niet beschikbaar.");
+  ensureGeoPermission().then((ok) => {
+    if (!ok) return;
 
   watchId = navigator.geolocation.watchPosition(
     (pos) => {
@@ -115,6 +187,8 @@ $("start").addEventListener("click", () => {
     (err) => alert("Locatie fout: " + err.message),
     { enableHighAccuracy:true, maximumAge:1000, timeout:8000 }
   );
+
+  }); // ensureGeoPermission
 
   $("start").disabled = true;
   $("stop").disabled = false;

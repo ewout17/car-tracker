@@ -1,6 +1,6 @@
 {
   "name": "ski-tracker",
-  "version": "4.0.0",
+  "version": "5.0.0",
   "main": "server.js",
   "type": "module",
   "scripts": {

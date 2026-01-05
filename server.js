@@ -8,6 +8,9 @@ const io = new Server(server, { cors: { origin: true } });
 
 app.use(express.static("public"));
 
+/**
+ * rooms[roomCode] = { ownerId, destination, pauseLog, users }
+ */
 const rooms = Object.create(null);
 
 function ensureRoom(code) {
@@ -35,6 +38,7 @@ function sanitizeRoom(room, roomCode) {
   };
 }
 
+// OSRM proxy: /api/route?from=lat,lon&to=lat,lon
 app.get("/api/route", async (req, res) => {
   try {
     const from = String(req.query.from || "");
@@ -52,7 +56,7 @@ app.get("/api/route", async (req, res) => {
       `${fLon},${fLat};${tLon},${tLat}` +
       `?overview=full&geometries=geojson&steps=false`;
 
-    const r = await fetch(url, { headers: { "User-Agent": "ski-tracker/4.0" } });
+    const r = await fetch(url, { headers: { "User-Agent": "ski-tracker/5.0" } });
     if (!r.ok) return res.status(502).json({ ok: false, error: "OSRM upstream error" });
 
     const data = await r.json();
@@ -160,6 +164,7 @@ io.on("connection", (socket) => {
       delete rooms[roomCode];
       return;
     }
+
     io.to(roomCode).emit("state", sanitizeRoom(room, roomCode));
   });
 });

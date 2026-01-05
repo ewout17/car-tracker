@@ -1,15 +1,22 @@
-# Ski Car Tracker v4 (App-like UI + PWA shell)
+# Ski Car Tracker v5 (Menu fix + Installeren)
 
-## Nieuw
-- Fullscreen kaart + topbar + bottom sheet panel
-- Floating action buttons (Start/Stop/Pauze)
-- Toast meldingen
-- Manifest + Service Worker (app-shell caching)
+## Fixes
+- Menu/topbar zichtbaar op mobiel (safe-area correct)
+- Altijd zichtbare knop **▲ Menu** op de kaart
+- Install-knop (Android/Chrome) + PWA icons + apple-touch-icon
 
-## Lokaal
-npm install
-npm start
+## Installeren op mobiel
+- **Android (Chrome):** open de site → knop **Installeren**
+- **iPhone (Safari):** Deel-knop → **Zet op beginscherm**
 
 ## Render
 Build: npm install
 Start: npm start
+
+
+## Locatie permissions (troubleshooting)
+- Locatie werkt alleen via **HTTPS**.
+- Als je ooit op **Blokkeren** hebt gedrukt:
+  - iPhone: Instellingen → Privacy en beveiliging → Locatievoorzieningen → Safari Websites → Tijdens gebruik (en ‘Precieze locatie’ aan)
+  - Android: Chrome → Site-instellingen → Locatie → Toestaan
+- Herlaad daarna de pagina.
