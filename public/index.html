@@ -2,73 +2,169 @@
 <html lang="nl">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <title>Ski Car Tracker</title>
 
-  <link rel="stylesheet" href="style.css" />
+  <meta name="theme-color" content="#0f1115" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 
-  <!-- Leaflet -->
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-  />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 </head>
 <body>
-  <div class="wrap">
-    <h1>🚗 Ski Car Tracker</h1>
-
-    <div class="card">
-      <div class="row">
-        <label>Room code</label>
-        <input id="room" placeholder="bijv. SAALBACH2026" />
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">🚗</div>
+      <div class="titles">
+        <div class="title">Ski Car Tracker</div>
+        <div class="subtitle" id="roomPill">Niet verbonden</div>
       </div>
-      <div class="row">
-        <label>Auto naam</label>
-        <input id="name" placeholder="bijv. Audi / Bus / Auto 3" />
-      </div>
-
-      <div class="actions">
-        <button id="join" class="primary">Join</button>
-        <button id="start" disabled>Start tracking</button>
-        <button id="stop" disabled>Stop</button>
-        <button id="share" disabled>Deel link</button>
-      </div>
-
-      <div class="row2">
-        <label class="cb">
-          <input type="checkbox" id="followMe" checked />
-          Kaart volgt mij
-        </label>
-
-        <label class="cb">
-          <input type="checkbox" id="showRoutes" />
-          Toon route-lijn naar geselecteerde auto
-        </label>
-      </div>
-
-      <p class="hint">
-        Tip: laat dit scherm open. iPhone: Safari moet open blijven voor live tracking.
-      </p>
-      <div id="status" class="small"></div>
     </div>
+    <button class="ghost" id="openPanel" aria-label="Open panel">☰</button>
+  </header>
 
-    <div class="card">
-      <h2>Kaart</h2>
+  <main class="main">
+    <section class="mapWrap">
       <div id="map"></div>
-      <div class="small">Klik op een auto in de lijst om die te selecteren (route-ETA wordt dan extra snel bijgewerkt).</div>
-    </div>
 
-    <div class="card">
-      <h2>Overzicht (live)</h2>
-      <div id="list"></div>
-    </div>
-  </div>
+      <div class="hud">
+        <div class="hudCard" id="hudDest">
+          <div class="hudTitle">Bestemming</div>
+          <div class="hudValue" id="hudDestValue">Nog niet ingesteld</div>
+        </div>
+
+        <div class="hudCard">
+          <div class="hudTitle">Status</div>
+          <div class="hudValue" id="hudStatus">Wachten…</div>
+        </div>
+      </div>
+
+      <div class="fabRow">
+        <button class="fab" id="pauseBtn" disabled>⏸ Pauze</button>
+        <button class="fab primary" id="start" disabled>▶ Start</button>
+        <button class="fab danger" id="stop" disabled>■ Stop</button>
+      </div>
+    </section>
+
+    <section class="sheet" id="sheet" aria-hidden="true">
+      <div class="sheetHandle" id="sheetHandle"></div>
+
+      <div class="sheetTabs">
+        <button class="tab active" data-tab="tab-join">Join</button>
+        <button class="tab" data-tab="tab-cars">Auto's</button>
+        <button class="tab" data-tab="tab-dest">Bestemming</button>
+        <button class="tab" data-tab="tab-msg">Meldingen</button>
+        <button class="tab" data-tab="tab-settings">Instellingen</button>
+      </div>
+
+      <div class="sheetBody">
+        <div class="tabPane active" id="tab-join">
+          <div class="grid2">
+            <div class="field">
+              <label>Room code</label>
+              <input id="room" placeholder="SAALBACH2026" />
+            </div>
+            <div class="field">
+              <label>Auto naam</label>
+              <input id="name" placeholder="Audi / Bus / Auto 3" />
+            </div>
+          </div>
+
+          <div class="grid3">
+            <div class="field">
+              <label>Type</label>
+              <select id="carType">
+                <option value="car">🚗 Auto</option>
+                <option value="bus">🚌 Bus</option>
+                <option value="audi">🚙 Audi</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Kleur</label>
+              <input id="carColor" type="color" value="#65B832" />
+            </div>
+            <div class="field">
+              <label>&nbsp;</label>
+              <button id="share" class="btn" disabled>Deel link</button>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button id="join" class="btn primary">Join room</button>
+            <button class="btn ghost" id="closePanel">Sluiten</button>
+          </div>
+
+          <div class="hint">
+            Locatie-permissie wordt gevraagd bij Join. Laat je browser open voor live updates.
+          </div>
+        </div>
+
+        <div class="tabPane" id="tab-cars">
+          <div class="hint">Tik op een auto om te selecteren. Zet “Volg geselecteerde auto” aan om de kaart te laten volgen.</div>
+          <div id="list" class="list"></div>
+        </div>
+
+        <div class="tabPane" id="tab-dest">
+          <div class="hint">Alleen de room eigenaar kan de bestemming instellen (eerste die joint).</div>
+          <div class="field">
+            <label>Adres/plek</label>
+            <input id="destLabel" placeholder="Saalbach Hinterglemm" />
+          </div>
+          <div class="actions">
+            <button id="destSearch" class="btn" disabled>Zoek & stel in</button>
+          </div>
+          <div class="destInfo" id="destInfo">Nog geen bestemming ingesteld.</div>
+        </div>
+
+        <div class="tabPane" id="tab-msg">
+          <div id="messages" class="messages"></div>
+        </div>
+
+        <div class="tabPane" id="tab-settings">
+          <div class="grid2">
+            <label class="switch">
+              <input type="checkbox" id="followMe" checked />
+              <span>Volg mij</span>
+            </label>
+
+            <label class="switch">
+              <input type="checkbox" id="followSelected" />
+              <span>Volg geselecteerde auto</span>
+            </label>
+
+            <label class="switch">
+              <input type="checkbox" id="showRoutes" checked />
+              <span>Toon routes</span>
+            </label>
+
+            <label class="switch">
+              <input type="checkbox" id="enableAlerts" checked />
+              <span>Meldingen</span>
+            </label>
+          </div>
+
+          <div class="field inline">
+            <label>Waarschuw binnen</label>
+            <input id="alertKm" type="number" min="1" step="1" value="10" />
+            <span>km</span>
+          </div>
+
+          <div class="actions">
+            <button class="btn ghost" id="closePanel2">Sluiten</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="toast" id="toast" aria-live="polite" aria-atomic="true"></div>
+  </main>
 
   <script src="/socket.io/socket.io.js"></script>
-
-  <!-- Leaflet -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
   <script src="app.js"></script>
 </body>
 </html>

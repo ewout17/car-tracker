@@ -1,26 +1,15 @@
-# Ski Car Tracker (Leaflet + Live GPS + Route ETA)
+# Ski Car Tracker v4 (App-like UI + PWA shell)
 
-## Wat is dit?
-Een simpele webapp voor 3 auto's (of meer) om live locaties te delen in een room, met:
-- Live kaart (Leaflet/OpenStreetMap)
-- Route-ETA (rijtijd/afstand) naar de andere auto's via OSRM
-- Voor/achter indicatie (heuristiek op basis van A->B vs B->A rijtijd)
-- Deellink knop + onthouden van room/naam
+## Nieuw
+- Fullscreen kaart + topbar + bottom sheet panel
+- Floating action buttons (Start/Stop/Pauze)
+- Toast meldingen
+- Manifest + Service Worker (app-shell caching)
 
-## Lokaal draaien
-```bash
+## Lokaal
 npm install
 npm start
-```
-Open: http://localhost:3000
 
-## Deploy naar Render
-- New + -> Web Service
-- Environment: Node
-- Build Command: npm install
-- Start Command: npm start
-- Let op: server luistert op process.env.PORT (is ingebouwd)
-
-## Bestanden
-- server.js (Express + Socket.IO + OSRM proxy)
-- public/ (frontend)
+## Render
+Build: npm install
+Start: npm start

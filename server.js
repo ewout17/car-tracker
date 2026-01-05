@@ -8,29 +8,33 @@ const io = new Server(server, { cors: { origin: true } });
 
 app.use(express.static("public"));
 
-/** In-memory state */
 const rooms = Object.create(null);
+
 function ensureRoom(code) {
-  if (!rooms[code]) rooms[code] = { users: {} };
+  if (!rooms[code]) rooms[code] = { ownerId: null, destination: null, pauseLog: [], users: {} };
   return rooms[code];
 }
-function sanitizeUsers(usersObj) {
-  return Object.entries(usersObj).map(([id, u]) => ({
-    id,
-    name: u.name,
-    lat: u.lat,
-    lon: u.lon,
-    speedKmh: u.speedKmh,
-    heading: u.heading,
-    ts: u.ts
-  }));
+
+function sanitizeRoom(room, roomCode) {
+  return {
+    roomCode,
+    ownerId: room.ownerId,
+    destination: room.destination,
+    pauseLog: room.pauseLog.slice(-25),
+    users: Object.entries(room.users).map(([id, u]) => ({
+      id,
+      name: u.name,
+      carType: u.carType,
+      color: u.color,
+      lat: u.lat,
+      lon: u.lon,
+      speedKmh: u.speedKmh,
+      heading: u.heading,
+      ts: u.ts
+    }))
+  };
 }
 
-/**
- * OSRM proxy (avoids CORS issues + lets us add small safety validation).
- * GET /api/route?from=lat,lon&to=lat,lon
- * Returns: { ok:true, distance_m, duration_s, geometry_geojson } OR { ok:false, error }
- */
 app.get("/api/route", async (req, res) => {
   try {
     const from = String(req.query.from || "");
@@ -43,13 +47,12 @@ app.get("/api/route", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Invalid coordinates" });
     }
 
-    // OSRM expects lon,lat
     const url =
       `https://router.project-osrm.org/route/v1/driving/` +
       `${fLon},${fLat};${tLon},${tLat}` +
       `?overview=full&geometries=geojson&steps=false`;
 
-    const r = await fetch(url, { headers: { "User-Agent": "ski-tracker/2.0" } });
+    const r = await fetch(url, { headers: { "User-Agent": "ski-tracker/4.0" } });
     if (!r.ok) return res.status(502).json({ ok: false, error: "OSRM upstream error" });
 
     const data = await r.json();
@@ -68,36 +71,32 @@ app.get("/api/route", async (req, res) => {
 });
 
 io.on("connection", (socket) => {
-  socket.on("join", ({ roomCode, name }) => {
+  socket.on("join", ({ roomCode, name, carType, color }) => {
     if (!roomCode || !name) return;
     roomCode = String(roomCode).trim().toUpperCase();
     name = String(name).trim().slice(0, 24);
-
-    socket.data.roomCode = roomCode;
-    socket.data.name = name;
+    carType = String(carType || "car").trim().slice(0, 16);
+    color = String(color || "#65B832").trim().slice(0, 20);
 
     const room = ensureRoom(roomCode);
+    if (!room.ownerId) room.ownerId = socket.id;
+
+    socket.data.roomCode = roomCode;
+
     room.users[socket.id] = {
-      name,
-      lat: null,
-      lon: null,
-      speedKmh: null,
-      heading: null,
+      name, carType, color,
+      lat: null, lon: null,
+      speedKmh: null, heading: null,
       ts: Date.now()
     };
 
     socket.join(roomCode);
-
-    io.to(roomCode).emit("state", {
-      roomCode,
-      users: sanitizeUsers(room.users)
-    });
+    io.to(roomCode).emit("state", sanitizeRoom(room, roomCode));
   });
 
   socket.on("pos", ({ lat, lon, speedKmh, heading, ts }) => {
     const roomCode = socket.data.roomCode;
     if (!roomCode || !rooms[roomCode]) return;
-
     const room = rooms[roomCode];
     const u = room.users[socket.id];
     if (!u) return;
@@ -108,10 +107,44 @@ io.on("connection", (socket) => {
     u.heading = heading == null ? null : Number(heading);
     u.ts = ts ? Number(ts) : Date.now();
 
-    io.to(roomCode).emit("state", {
-      roomCode,
-      users: sanitizeUsers(room.users)
+    io.to(roomCode).emit("state", sanitizeRoom(room, roomCode));
+  });
+
+  socket.on("setDestination", ({ label, lat, lon }) => {
+    const roomCode = socket.data.roomCode;
+    if (!roomCode || !rooms[roomCode]) return;
+    const room = rooms[roomCode];
+    if (socket.id !== room.ownerId) return;
+
+    const nLat = Number(lat);
+    const nLon = Number(lon);
+    if (!Number.isFinite(nLat) || !Number.isFinite(nLon)) return;
+
+    room.destination = { label: String(label || "Bestemming").slice(0, 80), lat: nLat, lon: nLon };
+
+    io.to(roomCode).emit("state", sanitizeRoom(room, roomCode));
+    io.to(roomCode).emit("roomMessage", {
+      type: "destination",
+      ts: Date.now(),
+      by: room.users[socket.id]?.name || "Room eigenaar",
+      text: `Bestemming ingesteld: ${room.destination.label}`
     });
+  });
+
+  socket.on("pause", ({ text }) => {
+    const roomCode = socket.data.roomCode;
+    if (!roomCode || !rooms[roomCode]) return;
+    const room = rooms[roomCode];
+
+    const by = room.users[socket.id]?.name || "Onbekend";
+    const ts = Date.now();
+    const msgText = String(text || "Pauze nemen").slice(0, 140);
+
+    room.pauseLog.push({ by, byId: socket.id, ts, text: msgText });
+    room.pauseLog = room.pauseLog.slice(-100);
+
+    io.to(roomCode).emit("roomMessage", { type: "pause", ts, by, text: msgText });
+    io.to(roomCode).emit("state", sanitizeRoom(room, roomCode));
   });
 
   socket.on("disconnect", () => {
@@ -121,15 +154,13 @@ io.on("connection", (socket) => {
     const room = rooms[roomCode];
     delete room.users[socket.id];
 
+    if (room.ownerId === socket.id) room.ownerId = Object.keys(room.users)[0] || null;
+
     if (Object.keys(room.users).length === 0) {
       delete rooms[roomCode];
       return;
     }
-
-    io.to(roomCode).emit("state", {
-      roomCode,
-      users: sanitizeUsers(room.users)
-    });
+    io.to(roomCode).emit("state", sanitizeRoom(room, roomCode));
   });
 });
 

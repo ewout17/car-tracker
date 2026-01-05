@@ -3,49 +3,75 @@ const socket = io();
 
 let watchId = null;
 let myId = null;
-
 let lastState = null;
 
-// Leaflet
 let map = null;
-let markers = new Map(); // socketId -> marker
+let markers = new Map();
 let selectedUserId = null;
-let routeLine = null;
 
-// Routing cache & throttling
-const routeCache = new Map(); // key -> {ts, data}
-const ROUTE_CACHE_MS = 12000;
-const ROUTE_MIN_INTERVAL_MS = 4000;
-let lastRouteCallAt = 0;
+let routeLineToSelected = null;
+let routeLineToDestination = null;
+
+let destination = null;
+let destinationAlerted = false;
+
+const routeCache = new Map();
+const ROUTE_CACHE_MS = 15000;
+
+const sheet = $("sheet");
+const toast = $("toast");
+let toastTimer = null;
 
 initPrefill();
 initMap();
+wireSheet();
+wireTabs();
+maybeRegisterSW();
+maybeRequestNotificationPermission();
+
+$("openPanel").addEventListener("click", () => openSheet(true));
+$("closePanel").addEventListener("click", () => openSheet(false));
+$("closePanel2").addEventListener("click", () => openSheet(false));
 
 $("join").addEventListener("click", () => {
   const roomCode = $("room").value.trim().toUpperCase();
   const myName = $("name").value.trim();
+  const carType = $("carType").value;
+  const color = $("carColor").value;
 
-  if (!roomCode || !myName) {
-    alert("Vul room code en auto naam in.");
-    return;
-  }
+  if (!roomCode || !myName) return showToast("Vul room code en auto naam in.");
 
   localStorage.setItem("ski_room", roomCode);
   localStorage.setItem("ski_name", myName);
+  localStorage.setItem("ski_carType", carType);
+  localStorage.setItem("ski_color", color);
 
-  socket.emit("join", { roomCode, name: myName });
+  if (!("geolocation" in navigator)) return alert("Geolocation niet beschikbaar.");
 
-  $("start").disabled = false;
-  $("join").disabled = true;
-  $("share").disabled = false;
-
-  setStatus("Verbonden. Start tracking om live GPS te delen.");
+  navigator.geolocation.getCurrentPosition(
+    () => {
+      socket.emit("join", { roomCode, name: myName, carType, color });
+      afterJoin(roomCode);
+      openSheet(false);
+      showToast("Verbonden ✅");
+    },
+    () => alert("Locatie is nodig. Sta locatie toe in je browser."),
+    { enableHighAccuracy: true, timeout: 10000 }
+  );
 });
+
+function afterJoin(roomCode){
+  $("start").disabled = false;
+  $("share").disabled = false;
+  $("pauseBtn").disabled = false;
+  $("roomPill").textContent = `Room: ${roomCode}`;
+  $("hudStatus").textContent = "Klaar om te starten";
+}
 
 $("share").addEventListener("click", async () => {
   const rc = ($("room").value || "").trim().toUpperCase();
   const nm = ($("name").value || "").trim();
-  if (!rc || !nm) return alert("Room en naam invullen voor delen.");
+  if (!rc || !nm) return showToast("Vul room + naam in.");
 
   const url = new URL(window.location.href);
   url.searchParams.set("room", rc);
@@ -53,17 +79,20 @@ $("share").addEventListener("click", async () => {
 
   try {
     await navigator.clipboard.writeText(url.toString());
-    setStatus("Deellink gekopieerd naar klembord ✅");
+    showToast("Deellink gekopieerd ✅");
   } catch {
     prompt("Kopieer deze link:", url.toString());
   }
 });
 
-$("start").addEventListener("click", async () => {
-  if (!("geolocation" in navigator)) {
-    alert("Geolocation niet beschikbaar op dit apparaat.");
-    return;
-  }
+$("pauseBtn").addEventListener("click", () => {
+  const txt = prompt("Pauze melding (optioneel):", "Pauze nemen");
+  if (txt === null) return;
+  socket.emit("pause", { text: txt || "Pauze nemen" });
+});
+
+$("start").addEventListener("click", () => {
+  if (!("geolocation" in navigator)) return alert("Geolocation niet beschikbaar.");
 
   watchId = navigator.geolocation.watchPosition(
     (pos) => {
@@ -78,24 +107,18 @@ $("start").addEventListener("click", async () => {
         ts: pos.timestamp || Date.now()
       });
 
-      // optimistic marker update
-      upsertMarker(myId, "Ik", latitude, longitude, true);
+      if ($("followMe").checked) map.panTo([latitude, longitude], { animate:true, duration:0.5 });
 
-      if ($("followMe").checked) {
-        map.setView([latitude, longitude], Math.max(map.getZoom(), 10), { animate: true });
-      }
-
-      setStatus(
-        `Tracking actief · nauwkeurigheid ~${Math.round(accuracy)}m · ` +
-        `snelheid: ${speedKmh == null ? "—" : speedKmh.toFixed(0) + " km/u"}`
-      );
+      $("hudStatus").textContent =
+        `Live · ~${Math.round(accuracy)}m · ${speedKmh == null ? "—" : speedKmh.toFixed(0)+" km/u"}`;
     },
     (err) => alert("Locatie fout: " + err.message),
-    { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 }
+    { enableHighAccuracy:true, maximumAge:1000, timeout:8000 }
   );
 
   $("start").disabled = true;
   $("stop").disabled = false;
+  showToast("Tracking gestart ▶");
 });
 
 $("stop").addEventListener("click", () => {
@@ -103,141 +126,236 @@ $("stop").addEventListener("click", () => {
   watchId = null;
   $("start").disabled = false;
   $("stop").disabled = true;
-  setStatus("Tracking gestopt.");
+  $("hudStatus").textContent = "Tracking gestopt";
+  showToast("Tracking gestopt ■");
 });
 
-$("showRoutes").addEventListener("change", () => {
-  if (!$("showRoutes").checked) clearRouteLine();
-  if ($("showRoutes").checked && lastState) render(lastState);
+$("followSelected").addEventListener("change", () => { if ($("followSelected").checked) $("followMe").checked = false; });
+$("followMe").addEventListener("change", () => { if ($("followMe").checked) $("followSelected").checked = false; });
+
+$("destSearch").addEventListener("click", async () => {
+  const label = $("destLabel").value.trim();
+  if (!label) return showToast("Vul een bestemming in.");
+
+  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(label)}&limit=1`;
+  const r = await fetch(url, { headers: { "Accept": "application/json" } });
+  const data = await r.json().catch(() => []);
+  if (!data?.[0]) return showToast("Geen resultaat. Probeer specifieker.");
+
+  const lat = Number(data[0].lat);
+  const lon = Number(data[0].lon);
+  const nice = (data[0].display_name || label).slice(0, 80);
+
+  socket.emit("setDestination", { label: nice, lat, lon });
+  showToast("Bestemming verstuurd 📍");
 });
 
 socket.on("connect", () => { myId = socket.id; });
-socket.on("state", (payload) => { lastState = payload; render(payload); });
+
+socket.on("state", (payload) => {
+  lastState = payload;
+  destination = payload.destination || null;
+  updateDestinationUI(payload);
+  render(payload);
+});
+
+socket.on("roomMessage", (msg) => {
+  addRoomMessage(msg);
+
+  if ($("enableAlerts").checked) {
+    if (msg.type === "pause") notify("⏸ Pauze", `${msg.by}: ${msg.text}`);
+    if (msg.type === "destination") { notify("📍 Bestemming", msg.text); destinationAlerted = false; }
+  }
+
+  if (msg.type === "pause") showToast(`⏸ ${msg.by}: ${msg.text}`);
+  if (msg.type === "destination") showToast(`📍 ${msg.text}`);
+});
 
 function initPrefill() {
   const url = new URL(window.location.href);
   const qRoom = url.searchParams.get("room");
   const qName = url.searchParams.get("name");
 
-  const savedRoom = localStorage.getItem("ski_room");
-  const savedName = localStorage.getItem("ski_name");
-
-  $("room").value = (qRoom || savedRoom || "").toUpperCase();
-  $("name").value = (qName || savedName || "");
+  $("room").value = (qRoom || localStorage.getItem("ski_room") || "").toUpperCase();
+  $("name").value = (qName || localStorage.getItem("ski_name") || "");
+  $("carType").value = localStorage.getItem("ski_carType") || "car";
+  $("carColor").value = localStorage.getItem("ski_color") || "#65B832";
 }
 
 function initMap() {
   map = L.map("map", { zoomControl: true }).setView([52.0, 6.7], 6);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution: "&copy; OpenStreetMap"
+    maxZoom:19, attribution:"&copy; OpenStreetMap"
   }).addTo(map);
 }
 
-function setStatus(t) { $("status").textContent = t; }
+function wireSheet(){ $("sheetHandle").addEventListener("click", () => openSheet(!sheet.classList.contains("open"))); }
+function openSheet(open){
+  sheet.classList.toggle("open", !!open);
+  sheet.setAttribute("aria-hidden", open ? "false" : "true");
+}
+function wireTabs(){
+  document.querySelectorAll(".tab").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".tab").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      const id = btn.getAttribute("data-tab");
+      document.querySelectorAll(".tabPane").forEach(p => p.classList.remove("active"));
+      document.getElementById(id).classList.add("active");
+    });
+  });
+}
 
-function render({ users }) {
+function showToast(text){
+  toast.textContent = text;
+  toast.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove("show"), 2400);
+}
+
+function updateDestinationUI(state) {
+  const isOwner = state.ownerId === myId;
+  $("destSearch").disabled = !isOwner;
+
+  if (destination) {
+    $("destInfo").textContent = `Bestemming: ${destination.label}`;
+    $("hudDestValue").textContent = destination.label;
+  } else {
+    $("destInfo").textContent = "Nog geen bestemming ingesteld.";
+    $("hudDestValue").textContent = "Nog niet ingesteld";
+  }
+}
+
+function addRoomMessage(msg){
+  const box = $("messages");
+  const el = document.createElement("div");
+  el.className = "msg";
+  el.innerHTML = `<b>${escapeHtml(msg.by || "Room")}</b> — ${escapeHtml(msg.text || "")}
+    <div class="meta">${new Date(msg.ts || Date.now()).toLocaleTimeString()}</div>`;
+  box.prepend(el);
+  while (box.children.length > 20) box.removeChild(box.lastChild);
+}
+
+function maybeRequestNotificationPermission(){
+  if (!("Notification" in window)) return;
+  if (Notification.permission === "default") Notification.requestPermission().catch(()=>{});
+}
+function notify(title, body){
+  if (!("Notification" in window)) return;
+  if (Notification.permission !== "granted") return;
+  try { new Notification(title, { body }); } catch {}
+}
+function maybeRegisterSW(){
+  if (!("serviceWorker" in navigator)) return;
+  navigator.serviceWorker.register("/sw.js").catch(()=>{});
+}
+
+function render(state){
+  const users = state.users || [];
   const withPos = users.filter(u => isFinite(u.lat) && isFinite(u.lon));
   const me = withPos.find(u => u.id === myId);
   const others = withPos.filter(u => u.id !== myId);
 
-  // Update markers
-  for (const u of withPos) {
-    upsertMarker(u.id, u.name, u.lat, u.lon, u.id === myId);
-  }
+  for (const u of withPos) upsertMarker(u);
 
-  // Remove missing
   const alive = new Set(withPos.map(u => u.id));
-  for (const [id, m] of markers.entries()) {
-    if (!alive.has(id)) {
+  for (const [id, m] of markers.entries()){
+    if (!alive.has(id)){
       map.removeLayer(m);
       markers.delete(id);
     }
   }
 
+  if ($("followSelected").checked && selectedUserId){
+    const m = markers.get(selectedUserId);
+    if (m) map.panTo(m.getLatLng(), { animate:true, duration:0.5 });
+  }
+
   const list = $("list");
   list.innerHTML = "";
 
-  if (!me) {
-    list.innerHTML = `<div class="small">Wacht op jouw GPS (start tracking) of join opnieuw…</div>`;
-    clearRouteLine();
-    return;
-  }
-  if (others.length === 0) {
-    list.innerHTML = `<div class="small">Nog geen andere auto's in deze room.</div>`;
-    clearRouteLine();
+  if (!me){
+    list.innerHTML = `<div class="hint">Start tracking om jouw GPS te delen…</div>`;
+    clearRoutes();
     return;
   }
 
-  if (!selectedUserId || !others.some(o => o.id === selectedUserId)) {
-    selectedUserId = others[0].id;
+  if (!selectedUserId || !others.some(o => o.id === selectedUserId)){
+    selectedUserId = others[0]?.id || null;
   }
 
-  for (const o of others) {
-    const card = document.createElement("div");
-    card.className = "kpi" + (o.id === selectedUserId ? " selected" : "");
-    card.innerHTML = `
-      <div>
-        <b>${escapeHtml(o.name)} <span class="badge">live</span></b>
-        <div class="small">Laatste update: ${timeAgo(o.ts)}</div>
-        <button class="selectBtn">${o.id === selectedUserId ? "Geselecteerd" : "Selecteer"}</button>
+  if ($("showRoutes").checked && destination) drawRouteToDestination(me);
+  else clearDestinationRoute();
+
+  for (const o of others){
+    const distKm = haversineKm(me.lat, me.lon, o.lat, o.lon);
+
+    const row = document.createElement("div");
+    row.className = "cardRow" + (o.id === selectedUserId ? " selected" : "");
+    row.innerHTML = `
+      <div class="left">
+        <span class="dot" style="background:${escapeHtml(o.color || "#65B832")}"></span>
+        <div style="min-width:0">
+          <div class="name">${escapeHtml(o.name)}</div>
+          <div class="meta">Afstand ${distKm.toFixed(1)} km · ${timeAgo(o.ts)} geleden</div>
+        </div>
       </div>
-      <div>
-        <b>Voor/achter</b>
-        <div class="small" id="pos-${o.id}">Berekenen…</div>
-      </div>
-      <div>
-        <b>Route-ETA</b>
-        <div class="small" id="eta-${o.id}">Berekenen…</div>
+      <div class="right">
+        <div class="pill">${typeEmoji(o.carType)} <span id="eta-${o.id}">${o.id === selectedUserId ? "…" : "—"}</span></div>
       </div>
     `;
-    list.appendChild(card);
-
-    card.querySelector(".selectBtn").addEventListener("click", () => {
+    row.addEventListener("click", () => {
       selectedUserId = o.id;
       focusOnUser(o.id);
       render(lastState);
+      showToast(`Geselecteerd: ${o.name}`);
     });
+    list.appendChild(row);
 
-    computeRouteAndRelative(me, o).then((info) => {
-      const etaEl = document.getElementById(`eta-${o.id}`);
-      const posEl = document.getElementById(`pos-${o.id}`);
-      if (etaEl) etaEl.textContent = info.etaText;
-      if (posEl) posEl.textContent = info.aheadBehindText;
-
-      if ($("showRoutes").checked && o.id === selectedUserId && info.geometry) {
-        drawRouteLine(info.geometry);
-      }
-    }).catch(() => {
-      const etaEl = document.getElementById(`eta-${o.id}`);
-      const posEl = document.getElementById(`pos-${o.id}`);
-      if (etaEl) etaEl.textContent = "Route-ETA niet beschikbaar";
-      if (posEl) posEl.textContent = "—";
-      if (o.id === selectedUserId) clearRouteLine();
-    });
+    if (o.id === selectedUserId){
+      computeRouteShort(me, o).then((info) => {
+        const etaEl = document.getElementById(`eta-${o.id}`);
+        if (etaEl) etaEl.textContent = info.etaShort;
+        if ($("showRoutes").checked && info.geometry) drawRouteToSelected(info.geometry);
+        else clearSelectedRoute();
+      }).catch(() => {
+        const etaEl = document.getElementById(`eta-${o.id}`);
+        if (etaEl) etaEl.textContent = "—";
+        clearSelectedRoute();
+      });
+    }
   }
 }
 
-function focusOnUser(userId) {
+function focusOnUser(userId){
   const m = markers.get(userId);
   if (!m) return;
-  map.setView(m.getLatLng(), Math.max(map.getZoom(), 11), { animate: true });
+  map.setView(m.getLatLng(), Math.max(map.getZoom(), 11), { animate:true });
 }
 
-function upsertMarker(id, name, lat, lon, isMe) {
+function upsertMarker(u){
+  const id = u.id;
+  const lat = Number(u.lat), lon = Number(u.lon);
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
 
-  const label = isMe ? `🟢 ${name} (ik)` : `🔵 ${name}`;
+  const icon = L.divIcon({
+    className: "leaflet-div-icon",
+    html: `<div class="carIcon" style="background:${escapeHtml(u.color || "#65B832")}">${typeEmoji(u.carType)}</div>`,
+    iconSize: [34,34],
+    iconAnchor: [17,17]
+  });
+
+  const label = `${typeEmoji(u.carType)} ${u.name}`;
   const existing = markers.get(id);
 
-  if (existing) {
+  if (existing){
     existing.setLatLng([lat, lon]);
+    existing.setIcon(icon);
     existing.setPopupContent(label);
   } else {
-    const marker = L.marker([lat, lon]);
-    marker.addTo(map).bindPopup(label);
+    const marker = L.marker([lat, lon], { icon }).addTo(map).bindPopup(label);
     marker.on("click", () => {
-      if (id !== myId) {
+      if (id !== myId){
         selectedUserId = id;
         render(lastState);
       }
@@ -247,95 +365,94 @@ function upsertMarker(id, name, lat, lon, isMe) {
   }
 }
 
-function clearRouteLine() {
-  if (routeLine) {
-    map.removeLayer(routeLine);
-    routeLine = null;
+function clearRoutes(){ clearSelectedRoute(); clearDestinationRoute(); }
+function clearSelectedRoute(){ if (routeLineToSelected){ map.removeLayer(routeLineToSelected); routeLineToSelected=null; } }
+function clearDestinationRoute(){ if (routeLineToDestination){ map.removeLayer(routeLineToDestination); routeLineToDestination=null; } }
+
+function drawRouteToSelected(geometry){
+  clearSelectedRoute();
+  routeLineToSelected = L.geoJSON(geometry, { weight:5, opacity:0.75 }).addTo(map);
+}
+
+async function drawRouteToDestination(me){
+  if (!destination) return;
+
+  const from = `${me.lat.toFixed(5)},${me.lon.toFixed(5)}`;
+  const to = `${destination.lat.toFixed(5)},${destination.lon.toFixed(5)}`;
+  const key = `DEST:${from}->${to}`;
+
+  const data = await getRouteCached(key, from, to);
+  if (!data?.ok) return;
+
+  clearDestinationRoute();
+  routeLineToDestination = L.geoJSON(data.geometry_geojson, { weight:6, opacity:0.45 }).addTo(map);
+
+  if ($("enableAlerts").checked) checkDestinationAlert(data.distance_m, destination.label);
+}
+
+function checkDestinationAlert(distanceMeters, label){
+  const limitKm = Number($("alertKm").value || 10);
+  const distKm = distanceMeters / 1000;
+  if (!destinationAlerted && distKm <= limitKm){
+    destinationAlerted = true;
+    notify("📍 Bestemming dichtbij", `Nog ${distKm.toFixed(1)} km tot ${label}`);
+    showToast(`Nog ${distKm.toFixed(1)} km tot bestemming`);
   }
 }
 
-function drawRouteLine(geometryGeoJson) {
-  clearRouteLine();
-  routeLine = L.geoJSON(geometryGeoJson, { weight: 5, opacity: 0.7 }).addTo(map);
-}
-
-async function computeRouteAndRelative(me, other) {
-  const now = Date.now();
-  if (now - lastRouteCallAt > ROUTE_MIN_INTERVAL_MS) {
-    lastRouteCallAt = now;
-  }
-
+async function computeRouteShort(me, other){
   const a = `${me.lat.toFixed(5)},${me.lon.toFixed(5)}`;
   const b = `${other.lat.toFixed(5)},${other.lon.toFixed(5)}`;
 
   const keyAB = `AB:${a}->${b}`;
-  const keyBA = `BA:${b}->${a}`;
+  const ab = await getRouteCached(keyAB, a, b);
 
-  const [ab, ba] = await Promise.all([
-    getRouteCached(keyAB, a, b),
-    getRouteCached(keyBA, b, a)
-  ]);
-
-  let etaText = "Route-ETA niet beschikbaar";
   let geometry = null;
-
-  if (ab?.ok) {
-    etaText = `~ ${formatDuration(ab.duration_s)} · ${formatKm(ab.distance_m)} km`;
+  let etaShort = "—";
+  if (ab?.ok){
+    etaShort = formatDuration(ab.duration_s);
     geometry = ab.geometry_geojson;
   }
-
-  let aheadBehindText = "Onbekend";
-  if (ab?.ok && ba?.ok) {
-    const d1 = ab.duration_s;
-    const d2 = ba.duration_s;
-    const ratio = Math.max(d1, d2) / Math.max(1, Math.min(d1, d2));
-
-    if (ratio < 1.25) {
-      aheadBehindText = "Ongeveer gelijk / niet duidelijk";
-    } else {
-      aheadBehindText = (d1 < d2)
-        ? `${other.name} rijdt waarschijnlijk vóór je`
-        : `${other.name} rijdt waarschijnlijk achter je`;
-    }
-  }
-
-  return { etaText, aheadBehindText, geometry };
+  return { etaShort, geometry };
 }
 
-async function getRouteCached(cacheKey, from, to) {
+async function getRouteCached(cacheKey, from, to){
   const hit = routeCache.get(cacheKey);
   if (hit && (Date.now() - hit.ts) < ROUTE_CACHE_MS) return hit.data;
 
   const url = `/api/route?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
-  const r = await fetch(url, { cache: "no-store" });
-  const data = await r.json().catch(() => ({ ok: false }));
-
+  const r = await fetch(url, { cache:"no-store" });
+  const data = await r.json().catch(() => ({ ok:false }));
   routeCache.set(cacheKey, { ts: Date.now(), data });
   return data;
 }
 
-function formatDuration(seconds) {
+function haversineKm(lat1, lon1, lat2, lon2){
+  const R = 6371;
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
+function formatDuration(seconds){
   if (!Number.isFinite(seconds)) return "—";
-  const totalMin = Math.round(seconds / 60);
-  const h = Math.floor(totalMin / 60);
+  const totalMin = Math.round(seconds/60);
+  const h = Math.floor(totalMin/60);
   const m = totalMin % 60;
-  if (h <= 0) return `${m} min`;
-  return `${h}u ${m}m`;
+  return h <= 0 ? `${m}m` : `${h}u ${m}m`;
 }
-function formatKm(meters) {
-  if (!Number.isFinite(meters)) return "—";
-  return (meters / 1000).toFixed(1);
-}
-function timeAgo(ts) {
-  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+function timeAgo(ts){
+  const s = Math.max(0, Math.floor((Date.now() - (ts || Date.now()))/1000));
   if (s < 10) return "net";
-  if (s < 60) return `${s}s geleden`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m geleden`;
-  const h = Math.floor(m / 60);
-  return `${h}u geleden`;
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s/60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m/60)}u`;
 }
-function escapeHtml(str) {
+function typeEmoji(t){ return t === "bus" ? "🚌" : (t === "audi" ? "🚙" : "🚗"); }
+function escapeHtml(str){
   return String(str).replace(/[&<>"']/g, (c) => ({
     "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
   }[c]));
