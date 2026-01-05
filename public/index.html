@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Ski Car Tracker</title>
+
+  <link rel="stylesheet" href="style.css" />
+
+  <!-- Leaflet -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  />
+</head>
+<body>
+  <div class="wrap">
+    <h1>🚗 Ski Car Tracker</h1>
+
+    <div class="card">
+      <div class="row">
+        <label>Room code</label>
+        <input id="room" placeholder="bijv. SAALBACH2026" />
+      </div>
+      <div class="row">
+        <label>Auto naam</label>
+        <input id="name" placeholder="bijv. Audi / Bus / Auto 3" />
+      </div>
+
+      <div class="actions">
+        <button id="join" class="primary">Join</button>
+        <button id="start" disabled>Start tracking</button>
+        <button id="stop" disabled>Stop</button>
+        <button id="share" disabled>Deel link</button>
+      </div>
+
+      <div class="row2">
+        <label class="cb">
+          <input type="checkbox" id="followMe" checked />
+          Kaart volgt mij
+        </label>
+
+        <label class="cb">
+          <input type="checkbox" id="showRoutes" />
+          Toon route-lijn naar geselecteerde auto
+        </label>
+      </div>
+
+      <p class="hint">
+        Tip: laat dit scherm open. iPhone: Safari moet open blijven voor live tracking.
+      </p>
+      <div id="status" class="small"></div>
+    </div>
+
+    <div class="card">
+      <h2>Kaart</h2>
+      <div id="map"></div>
+      <div class="small">Klik op een auto in de lijst om die te selecteren (route-ETA wordt dan extra snel bijgewerkt).</div>
+    </div>
+
+    <div class="card">
+      <h2>Overzicht (live)</h2>
+      <div id="list"></div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+
+  <!-- Leaflet -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script src="app.js"></script>
+</body>
+</html>
